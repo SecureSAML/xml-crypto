@@ -594,11 +594,13 @@ export class SignedXml {
       this.signatureAlgorithm = signatureAlgorithm.value as SignatureAlgorithmType;
     }
 
+    const signedInfoNodes = utils.findChildren(this.signatureNode, "SignedInfo");
+    if (!utils.isArrayHasLength(signedInfoNodes)) {
+      throw new Error('no signed info node found')
+    }
+
     this.references = [];
-    const references = xpath.select(
-      ".//*[local-name(.)='SignedInfo']/*[local-name(.)='Reference']",
-      signatureNode,
-    );
+    const references = utils.findChildren(signedInfoNodes[0], "Reference")
     if (!utils.isArrayHasLength(references)) {
       throw new Error("could not find any Reference elements");
     }
