@@ -39,6 +39,7 @@ describe("Document tests", function () {
     const result = sig.checkSignature(xml);
 
     expect(result).to.be.true;
+    expect(sig.signedReferences.length).to.equal(1);
   });
 });
 
@@ -55,6 +56,7 @@ describe("Validated node references tests", function () {
     const ref = sig.getReferences()[0];
     const result = ref.getValidatedNode();
     expect(result?.toString()).to.equal(doc.toString());
+    expect(sig.signedReferences.length).to.equal(1);
   });
 
   it("should not return references if the document is not validly signed", function () {
@@ -62,12 +64,16 @@ describe("Validated node references tests", function () {
     const doc = new xmldom.DOMParser().parseFromString(xml);
     const sig = new SignedXml();
     sig.loadSignature(sig.findSignatures(doc)[0]);
+    sig.publicCert = fs.readFileSync("./test/static/client_public.pem");
+
     const validSignature = sig.checkSignature(xml);
     expect(validSignature).to.be.false;
 
     const ref = sig.getReferences()[1];
     const result = ref.getValidatedNode();
     expect(result).to.be.null;
+    expect(sig.signedReferences.length).to.equal(1); // there are multiple references, only the 0th is signed
+
   });
 
   it("should return `null` if the selected node isn't found", function () {
@@ -82,6 +88,8 @@ describe("Validated node references tests", function () {
     const ref = sig.getReferences()[0];
     const result = ref.getValidatedNode("/non-existent-node");
     expect(result).to.be.null;
+    expect(sig.signedReferences.length).to.equal(1);
+
   });
 
   it("should return the selected node if it is validly signed", function () {
@@ -98,6 +106,8 @@ describe("Validated node references tests", function () {
       "//*[local-name()='Attribute' and @Name='mail']/*[local-name()='AttributeValue']/text()",
     );
     expect(result?.nodeValue).to.equal("henri.bergius@nemein.com");
+    expect(sig.signedReferences.length).to.equal(1);
+
   });
 
   it("should return `null` if the selected node isn't validly signed", function () {
@@ -105,6 +115,9 @@ describe("Validated node references tests", function () {
     const doc = new xmldom.DOMParser().parseFromString(xml);
     const sig = new SignedXml();
     sig.loadSignature(sig.findSignatures(doc)[0]);
+    // add public cert, because now, the signed info is verified first
+    sig.publicCert = fs.readFileSync("./test/static/client_public.pem");
+
     const validSignature = sig.checkSignature(xml);
     expect(validSignature).to.be.false;
 
@@ -113,5 +126,7 @@ describe("Validated node references tests", function () {
       "//*[local-name()='Attribute' and @Name='mail']/*[local-name()='AttributeValue']/text()",
     );
     expect(result).to.be.null;
+    expect(sig.signedReferences.length).to.equal(1); // only one of the many references is signed, rest are invalid
+
   });
 });

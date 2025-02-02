@@ -91,7 +91,7 @@ export class SignedXml {
    * To add a new hash algorithm create a new class that implements the {@link HashAlgorithm} interface, and register it here. More info: {@link https://github.com/node-saml/xml-crypto#customizing-algorithms|Customizing Algorithms}
    */
   HashAlgorithms: Record<HashAlgorithmType, new () => HashAlgorithm> = {
-    "http://www.w3.org/2000/09/xmldsig#sha1": hashAlgorithms.Sha1,
+    "http://www.w3.org/2000/09/xmldsig#sha1": hashAlgorithms.Sha1, // may consider deprecation later, due to sha 1 insecurities
     "http://www.w3.org/2001/04/xmlenc#sha256": hashAlgorithms.Sha256,
     "http://www.w3.org/2001/04/xmlenc#sha512": hashAlgorithms.Sha512,
   };
@@ -112,6 +112,8 @@ export class SignedXml {
   };
 
   static noop = () => null;
+  private signedInfo: string | "";
+  public signedReferences: string[] = [];
 
   /**
    * The SignedXml constructor provides an abstraction for sign and verify xml documents. The object is constructed using
@@ -154,6 +156,8 @@ export class SignedXml {
     this.CanonicalizationAlgorithms;
     this.HashAlgorithms;
     this.SignatureAlgorithms;
+    this.signedInfo = "";
+    this.signedReferences = []; // our signedReference class
   }
 
   /**
@@ -252,6 +256,87 @@ export class SignedXml {
     this.signedXml = xml;
 
     const doc = new xmldom.DOMParser().parseFromString(xml);
+    // mutate the this.references to our new list after we have the document
+    // Ideally we should have been able to load the Signature and it's references in one go
+    // However, in the .loadSignature() method we don't necessarily have the underlying document
+    // It is only provided here. And we need the underlying document if we want to keep the inclusive namespaces
+
+    // signedInfoCanon is unsigned here, we will show that it is signed in later step (B)
+    const signedInfoCanon = this.getCanonSignedInfoXml(doc);
+
+    // type checking
+    if (!(typeof signedInfoCanon === "string")) {
+      throw new Error("signedInfoCanon must be a string");
+    }
+
+    // first get a trusted key from the library user
+
+    const key = this.getCertFromKeyInfo(this.keyInfo) || this.publicCert || this.privateKey;
+    if (key == null) {
+      throw new Error("KeyInfo or publicCert or privateKey is required to validate signature");
+    }
+    // then find a trusted algorithm
+    const signer = this.findSignatureAlgorithm(this.signatureAlgorithm);
+
+    // quick hack since we can't change the underlying signer class
+    // hmac was already disabled by default, but we want to prevent edge cases where a client may have accidentally
+    // enabled hmac for public keys thinking it was safe
+/*    if (publicCert && publicCert && this.signatureAlgorithm && this.signatureAlgorithm.includes("#hmac-")) {
+      throw new Error("Preventing algorithm confusion attacks for public key and secret key hmac algorithm");
+    }
+*/
+
+    // now given known cryptographic algorithm:
+    // verify the signature of the signedInfoCanon with key
+    const verified = signer.verifySignature(signedInfoCanon, key, this.signatureValue);
+
+
+    if (callback && !(verified === true)) {
+      callback(new Error(
+        `invalid signature: the signature value ${this.signatureValue} is incorrect`
+      ), false)
+      return;
+    }
+    // only continue verifying references unless verified === true
+
+    if (!(verified === true)) {
+      throw new Error(
+        `invalid signature: the signature value ${this.signatureValue} is incorrect`,
+      );
+    }
+
+    /* Old callback code, replace with more clearer functionality
+    *     if (callback) {
+      signer.verifySignature(signedInfoCanon, key, this.signatureValue, callback);
+    } else {
+    * */
+
+    // now we know that only the "signedInfoCanon" is signed by key
+    // parse it into a signedInfo node
+    const parsedSignedInfo = new xmldom.DOMParser().parseFromString(signedInfoCanon, "text/xml");
+
+    const signedInfoDoc = parsedSignedInfo.documentElement;
+    if (!signedInfoDoc) {
+      throw new Error('Could not parse signedInfoCanon into a document')
+    }
+
+    // reset the references. Previous references loaded cannot be trusted
+    // only references from our new re-parsed signedInfo node
+    this.references = [];
+    const references = xpath.select(
+      "/*[local-name()='SignedInfo']/*[local-name()='Reference']",
+      signedInfoDoc
+    );
+    if (!utils.isArrayHasLength(references)) {
+      throw new Error("could not find any Reference elements");
+    }
+
+    for (const reference of references) {
+      this.loadReference(reference);
+    }
+
+    // with newly loaded references, validate each reference
+    // in the validateReference call, we add new signedReference iff the digest matches
 
     if (!this.getReferences().every((ref) => this.validateReference(ref, doc))) {
       if (callback) {
@@ -262,25 +347,7 @@ export class SignedXml {
       return false;
     }
 
-    const signedInfoCanon = this.getCanonSignedInfoXml(doc);
-    const signer = this.findSignatureAlgorithm(this.signatureAlgorithm);
-    const key = this.getCertFromKeyInfo(this.keyInfo) || this.publicCert || this.privateKey;
-    if (key == null) {
-      throw new Error("KeyInfo or publicCert or privateKey is required to validate signature");
-    }
-    if (callback) {
-      signer.verifySignature(signedInfoCanon, key, this.signatureValue, callback);
-    } else {
-      const verified = signer.verifySignature(signedInfoCanon, key, this.signatureValue);
-
-      if (verified === false) {
-        throw new Error(
-          `invalid signature: the signature value ${this.signatureValue} is incorrect`,
-        );
-      }
-
-      return true;
-    }
+    return true;
   }
 
   private getCanonSignedInfoXml(doc: Document) {
@@ -373,6 +440,7 @@ export class SignedXml {
   }
 
   private findHashAlgorithm(name: HashAlgorithmType) {
+    // given untrusted hash algorithm name, find the associated known, secure hash algorithm
     const algo = this.HashAlgorithms[name];
     if (algo) {
       return new algo();
@@ -466,6 +534,7 @@ export class SignedXml {
     const hash = this.findHashAlgorithm(ref.digestAlgorithm);
     const digest = hash.getHash(canonXml);
 
+
     if (!utils.validateDigestValue(digest, ref.digestValue)) {
       const validationError = new Error(
         `invalid signature: for uri ${ref.uri} calculated digest is ${digest} but the xml to validate supplies digest ${ref.digestValue}`,
@@ -474,7 +543,10 @@ export class SignedXml {
 
       return false;
     }
-
+    // we verified that they have same hash
+    // so, the canonXml and only the canonXml can be trusted
+    // append this to signedReferences
+    this.signedReferences.push(canonXml);
     return true;
   }
 
@@ -572,11 +644,12 @@ export class SignedXml {
     if (nodes.length === 0) {
       throw new Error(`could not find DigestValue node in reference ${refNode.toString()}`);
     }
-    const firstChild = nodes[0].firstChild;
-    if (!firstChild || !("data" in firstChild)) {
-      throw new Error(`could not find the value of DigestValue in ${nodes[0].toString()}`);
+    const firstChild = nodes[0];
+    if (!firstChild) {
+      throw new Error(`could not find the value of DigestValue in ${refNode.toString()}`);
     }
-    const digestValue = firstChild.data;
+
+    const digestValue = firstChild.textContent;
 
     const transforms: string[] = [];
     let inclusiveNamespacesPrefixList: string[] = [];

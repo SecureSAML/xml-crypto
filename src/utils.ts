@@ -297,9 +297,19 @@ export function validateDigestValue(digest, expectedDigest) {
   const buffer = Buffer.from(digest, "base64");
   const expectedBuffer = Buffer.from(expectedDigest, "base64");
 
+
+  // additional verifications in case that the hashing went wrong
+  // e.g. digest is an empty string
+  if (!(buffer.length >= 20)) {
+    return false;
+  }
+
+
   if (typeof buffer.equals === "function") {
     return buffer.equals(expectedBuffer);
   }
+
+
 
   if (buffer.length !== expectedBuffer.length) {
     return false;

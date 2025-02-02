@@ -1,5 +1,12 @@
 # xml-crypto
 
+# Changelog
+
+- Introduced new .signedReferences property of signature to help prevent signature wrapping attacks.
+- After calling .checkSignature() with your public certificate, obtain .signedReferences to use. Array of signed strings by the certificate
+
+
+
 ![Build](https://github.com/node-saml/xml-crypto/actions/workflows/ci.yml/badge.svg)
 [![Gitpod Ready-to-Code](https://img.shields.io/badge/Gitpod-Ready--to--Code-blue?logo=gitpod)](https://gitpod.io/from-referrer/)
 
@@ -176,7 +183,22 @@ try {
 
 In order to protect from some attacks we must check the content we want to use is the one that has been signed:
 
+### New: to prevent signature wrapping attacks, 
+
 ```javascript
+// new .signedReferences method
+
+const signed = sig.signedReferences; // array of strings signed
+// you can re-parse it and then use it 
+
+const firstReference = signed[0];
+
+// now any data here has been signed by the public certificate
+var signedNode = new dom().parseFromString(firstReference);
+
+
+// previously deprecated methods, do NOT use.
+
 // Roll your own
 const elem = xpath.select("/xpath_to_interesting_element", doc);
 const uri = sig.getReferences()[0].uri; // might not be 0; it depends on the document
