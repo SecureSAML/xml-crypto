@@ -14,6 +14,9 @@ import type {
   CanonicalizationOrTransformationAlgorithmProcessOptions,
 } from "./types";
 
+// add deprecation functionality
+import { deprecate } from 'util';
+
 import * as xpath from "xpath";
 import * as xmldom from "@xmldom/xmldom";
 import * as utils from "./utils";
@@ -317,6 +320,10 @@ export class SignedXml {
     // reset the references. Previous references loaded cannot be trusted
     // only references from our new re-parsed signedInfo node
     this.references = [];
+
+    // reset the signedReferences as well after each chek
+    this.signedReferences = [];
+
     const references = xpath.select(
       "/*[local-name()='SignedInfo']/*[local-name()='Reference']",
       signedInfoDoc
@@ -331,8 +338,8 @@ export class SignedXml {
 
     // with newly loaded references, validate each reference
     // in the validateReference call, we add new signedReference iff the digest matches
-
-    if (!this.getReferences().every((ref) => this.validateReference(ref, doc))) {
+    // use internal .references to avoid deprecation error
+    if (!this.references.every((ref) => this.validateReference(ref, doc))) {
       if (callback) {
         callback(new Error("Could not validate all references"));
         return;
@@ -750,8 +757,19 @@ export class SignedXml {
     });
   }
 
+  private _getReferences = deprecate(
+    function (this: SignedXml): Reference[] {
+      return this.references;
+    },
+    'getReferences are deprecated, because the contents are not trusted. Migration:\n' +
+    '1. first checkSignature(), \n' +
+    '2. .signedReferences contain list of XML strings that are signed in this step\n' +
+    '3. Re-parse each string inside .signedReferences, and use only that content for processing\n' +
+    '4. Feel free to ask for help inside the xml-crypto repository'
+  );
+
   getReferences(): Reference[] {
-    return this.references;
+    return this._getReferences();
   }
 
   /**
