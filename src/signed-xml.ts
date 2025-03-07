@@ -112,7 +112,7 @@ export class SignedXml {
   };
 
   static noop = () => null;
-  private signedInfo: string | "";
+  private signedInfo: string;
   public signedReferences: string[] = [];
 
   /**
@@ -157,7 +157,9 @@ export class SignedXml {
     this.HashAlgorithms;
     this.SignatureAlgorithms;
     this.signedInfo = "";
-    this.signedReferences = []; // our signedReference class
+    // this populates only after verifying the signature
+    // array of bytes that are cryptographically authenticated
+    this.signedReferences = [];
   }
 
   /**
@@ -277,14 +279,6 @@ export class SignedXml {
     }
     // then find a trusted algorithm
     const signer = this.findSignatureAlgorithm(this.signatureAlgorithm);
-
-    // quick hack since we can't change the underlying signer class
-    // hmac was already disabled by default, but we want to prevent edge cases where a client may have accidentally
-    // enabled hmac for public keys thinking it was safe
-/*    if (publicCert && publicCert && this.signatureAlgorithm && this.signatureAlgorithm.includes("#hmac-")) {
-      throw new Error("Preventing algorithm confusion attacks for public key and secret key hmac algorithm");
-    }
-*/
 
     // now given known cryptographic algorithm:
     // verify the signature of the signedInfoCanon with key
