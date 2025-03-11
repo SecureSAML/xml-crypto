@@ -27,6 +27,7 @@ import * as hashAlgorithms from "./hash-algorithms";
 import * as signatureAlgorithms from "./signature-algorithms";
 import * as crypto from "crypto";
 import * as isDomNode from "@xmldom/is-dom-node";
+import { DOMParser as Dom } from "@xmldom/xmldom";
 
 export class SignedXml {
   idMode?: "wssecurity";
@@ -600,8 +601,13 @@ export class SignedXml {
       throw new Error('no signed info node found')
     }
 
+    // try to operate over the c14n version of signedInfo (however still not the safe as previously)
+    const s = new Dom().parseFromString(this.getCanonXml(["http://www.w3.org/2001/10/xml-exc-c14n#"], signedInfoNodes[0]), "text/xml");
+    const signedInfoDoc = s.documentElement;
+
+
     this.references = [];
-    const references = utils.findChildren(signedInfoNodes[0], "Reference")
+    const references = utils.findChildren(signedInfoDoc, "Reference")
     if (!utils.isArrayHasLength(references)) {
       throw new Error("could not find any Reference elements");
     }
@@ -703,10 +709,12 @@ export class SignedXml {
       transforms.push("http://www.w3.org/TR/2001/REC-xml-c14n-20010315");
     }
 
+    const refUri = isDomNode.isElementNode(refNode) ? (refNode.getAttribute("URI") || undefined) : undefined;
+
     this.addReference({
       transforms,
       digestAlgorithm: digestAlgo,
-      uri: isDomNode.isElementNode(refNode) ? utils.findAttr(refNode, "URI")?.value : undefined,
+      uri: refUri,
       digestValue,
       inclusiveNamespacesPrefixList,
       isEmptyUri: false,
