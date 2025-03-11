@@ -5,6 +5,16 @@
 - Introduced new .signedReferences property of signature to help prevent signature wrapping attacks.
 - After calling .checkSignature() with your public certificate, obtain .signedReferences to use. Array of signed strings by the certificate
 
+# Upgrading
+
+The `.getReferences() AND the .references` API is deprecated.
+Please do not attempt to access it. The content in there should be treated as unsigned.
+
+Instead, we strongly encourage users to migrate to the .signedReferences API. See the `Verifying XML document` section
+We understand that this may take a lot of efforts to migrate, feel free to ask for help.
+This will help prevent future XML signature wrapping attacks in the future.
+
+``
 
 
 ![Build](https://github.com/node-saml/xml-crypto/actions/workflows/ci.yml/badge.svg)
@@ -167,6 +177,10 @@ var select = require("xml-crypto").xpath,
 
 var xml = fs.readFileSync("signed.xml").toString();
 var doc = new dom().parseFromString(xml);
+// DO NOT attempt to load the doc here. You have not verified it.
+// i.e. BAD: parseAssertion(doc),
+
+// good: see below
 
 var signature = select(
   doc,
@@ -179,60 +193,19 @@ try {
 } catch (ex) {
   console.log(ex);
 }
+
+let signedData = sig.signedReferences[0]; // extract the first of many signed bytes
+// make sure to only use the signedData
+// For example, SAML:
+
+// obtain the assertion XML from here
+// use only authenticated data
+let signedAssertionBytes = extractAssertion(signedData);
+let parsedAssertion = parseAssertion(signedAssertionBytes) // yours to implement
+
+return parsedAssertion; // now return the client, the signed Assertion
 ```
 
-In order to protect from some attacks we must check the content we want to use is the one that has been signed:
-
-### New: to prevent signature wrapping attacks, 
-
-```javascript
-// new .signedReferences method
-
-const signed = sig.signedReferences; // array of strings signed
-// you can re-parse it and then use it 
-
-const firstReference = signed[0];
-
-// now any data here has been signed by the public certificate
-var signedNode = new dom().parseFromString(firstReference);
-
-
-// previously deprecated methods, do NOT use.
-
-// Roll your own
-const elem = xpath.select("/xpath_to_interesting_element", doc);
-const uri = sig.getReferences()[0].uri; // might not be 0; it depends on the document
-const id = uri[0] === "#" ? uri.substring(1) : uri;
-if (
-  elem.getAttribute("ID") != id &&
-  elem.getAttribute("Id") != id &&
-  elem.getAttribute("id") != id
-) {
-  throw new Error("The interesting element was not the one verified by the signature");
-}
-
-// Get the validated element directly from a reference
-const elem = sig.references[0].getValidatedElement(); // might not be 0; it depends on the document
-const matchingReference = xpath.select1("/xpath_to_interesting_element", elem);
-if (!isDomNode.isNodeLike(matchingReference)) {
-  throw new Error("The interesting element was not the one verified by the signature");
-}
-
-// Use the built-in method
-const elem = xpath.select1("/xpath_to_interesting_element", doc);
-try {
-  const matchingReference = sig.validateElementAgainstReferences(elem, doc);
-} catch {
-  throw new Error("The interesting element was not the one verified by the signature");
-}
-
-// Use the built-in method with a an xpath expression
-try {
-  const matchingReference = sig.validateReferenceWithXPath("/xpath_to_interesting_element", doc);
-} catch {
-  throw new Error("The interesting element was not the one verified by the signature");
-}
-```
 
 Note:
 
