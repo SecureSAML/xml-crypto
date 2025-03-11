@@ -11,7 +11,7 @@ import type {
   SignedXmlOptions,
   CanonicalizationOrTransformAlgorithmType,
   ErrorFirstCallback,
-  CanonicalizationOrTransformationAlgorithmProcessOptions,
+  CanonicalizationOrTransformationAlgorithmProcessOptions, NamespacePrefix
 } from "./types";
 
 // add deprecation functionality
@@ -115,8 +115,8 @@ export class SignedXml {
   };
 
   static noop = () => null;
-  private signedInfo: string;
   public signedReferences: string[] = [];
+  private signedInfoNode: Element | null;
 
   /**
    * The SignedXml constructor provides an abstraction for sign and verify xml documents. The object is constructed using
@@ -159,10 +159,10 @@ export class SignedXml {
     this.CanonicalizationAlgorithms;
     this.HashAlgorithms;
     this.SignatureAlgorithms;
-    this.signedInfo = "";
     // this populates only after verifying the signature
     // array of bytes that are cryptographically authenticated
     this.signedReferences = [];
+    this.signedInfoNode = null
   }
 
   /**
@@ -267,7 +267,7 @@ export class SignedXml {
     // It is only provided here. And we need the underlying document if we want to keep the inclusive namespaces
 
     // signedInfoCanon is unsigned here, we will show that it is signed in later step (B)
-    const signedInfoCanon = this.getCanonSignedInfoXml(doc);
+    const signedInfoCanon = this.canonicalizeSignedInfo(this.signedInfoNode, doc);
 
     // type checking
     if (!(typeof signedInfoCanon === "string")) {
@@ -287,19 +287,17 @@ export class SignedXml {
     // verify the signature of the signedInfoCanon with key
     const verified = signer.verifySignature(signedInfoCanon, key, this.signatureValue);
 
-
     if (callback && !(verified === true)) {
-      callback(new Error(
-        `invalid signature: the signature value ${this.signatureValue} is incorrect`
-      ), false)
+      callback(
+        new Error(`invalid signature: the signature value ${this.signatureValue} is incorrect`),
+        false,
+      );
       return;
     }
     // only continue verifying references unless verified === true
 
     if (!(verified === true)) {
-      throw new Error(
-        `invalid signature: the signature value ${this.signatureValue} is incorrect`,
-      );
+      throw new Error(`invalid signature: the signature value ${this.signatureValue} is incorrect`);
     }
 
     /* Old callback code, replace with more clearer functionality
@@ -314,7 +312,7 @@ export class SignedXml {
 
     const signedInfoDoc = parsedSignedInfo.documentElement;
     if (!signedInfoDoc) {
-      throw new Error('Could not parse signedInfoCanon into a document')
+      throw new Error("Could not parse signedInfoCanon into a document");
     }
 
     // reset the references. Previous references loaded cannot be trusted
@@ -326,7 +324,7 @@ export class SignedXml {
 
     const references = xpath.select(
       "/*[local-name()='SignedInfo']/*[local-name()='Reference']",
-      signedInfoDoc
+      signedInfoDoc,
     );
     if (!utils.isArrayHasLength(references)) {
       throw new Error("could not find any Reference elements");
@@ -351,6 +349,46 @@ export class SignedXml {
     return true;
   }
 
+  // refactor into new method to clearer
+  // contextDoc is provided for canonicalization
+  private canonicalizeSignedInfo(signedInfoNode: Element | null, contextDoc: Document | null) {
+    if (this.signatureNode == null) {
+      throw new Error("No signature found.");
+    }
+    if (typeof this.canonicalizationAlgorithm !== "string") {
+      throw new Error("Missing canonicalizationAlgorithm when trying to get signed info for XML");
+    }
+
+    if (!signedInfoNode) {
+      throw new Error("could not find SignedInfo element in the message");
+    }
+
+    let ancestorNamespaces: NamespacePrefix[] = [];
+
+    if (
+      this.canonicalizationAlgorithm === "http://www.w3.org/TR/2001/REC-xml-c14n-20010315" ||
+      this.canonicalizationAlgorithm ===
+        "http://www.w3.org/TR/2001/REC-xml-c14n-20010315#WithComments"
+    ) {
+      if (!contextDoc || typeof contextDoc !== "object") {
+        throw new Error(
+          "When canonicalization method is non-exclusive, whole xml dom must be provided as an argument",
+        );
+      }
+      ancestorNamespaces = utils.findAncestorNs(contextDoc, "//*[local-name()='SignedInfo']");
+    }
+    const c14nOptions = {
+      ancestorNamespaces: ancestorNamespaces,
+    };
+
+    /**
+     * Search for ancestor namespaces before canonicalization.
+     */
+
+    return this.getCanonXml([this.canonicalizationAlgorithm], signedInfoNode, c14nOptions);
+  }
+
+  /** @deprecated this method is unclear**/
   private getCanonSignedInfoXml(doc: Document) {
     if (this.signatureNode == null) {
       throw new Error("No signature found.");
@@ -535,7 +573,6 @@ export class SignedXml {
     const hash = this.findHashAlgorithm(ref.digestAlgorithm);
     const digest = hash.getHash(canonXml);
 
-
     if (!utils.validateDigestValue(digest, ref.digestValue)) {
       const validationError = new Error(
         `invalid signature: for uri ${ref.uri} calculated digest is ${digest} but the xml to validate supplies digest ${ref.digestValue}`,
@@ -595,13 +632,29 @@ export class SignedXml {
       this.signatureAlgorithm = signatureAlgorithm.value as SignatureAlgorithmType;
     }
 
+    // try to use canonicalized XML as much as possible
+
     const signedInfoNodes = utils.findChildren(this.signatureNode, "SignedInfo");
     if (!utils.isArrayHasLength(signedInfoNodes)) {
-      throw new Error('no signed info node found')
+      throw new Error("no signed info node found");
+    }
+
+    this.signedInfoNode = signedInfoNodes[0];
+    // try to use the temporarily canonicalized XML incase that the user has decided to use .references first
+    const canonXML = this.getCanonXml(
+      ["http://www.w3.org/2001/10/xml-exc-c14n#"],
+      this.signedInfoNode,
+    );
+
+    const parsedSignedInfo = new xmldom.DOMParser().parseFromString(canonXML, "text/xml");
+
+    const signedInfoDoc = parsedSignedInfo.documentElement;
+    if (!signedInfoDoc) {
+      throw new Error("Could not parse signedInfoCanon into a document");
     }
 
     this.references = [];
-    const references = utils.findChildren(signedInfoNodes[0], "Reference")
+    const references = utils.findChildren(signedInfoDoc, "Reference");
     if (!utils.isArrayHasLength(references)) {
       throw new Error("could not find any Reference elements");
     }
@@ -706,7 +759,8 @@ export class SignedXml {
     this.addReference({
       transforms,
       digestAlgorithm: digestAlgo,
-      uri: isDomNode.isElementNode(refNode) ? utils.findAttr(refNode, "URI")?.value : undefined,
+      // fix
+      uri: isDomNode.isElementNode(refNode) ? refNode.getAttribute("URI") || undefined : undefined,
       digestValue,
       inclusiveNamespacesPrefixList,
       isEmptyUri: false,
@@ -761,11 +815,11 @@ export class SignedXml {
     function (this: SignedXml): Reference[] {
       return this.references;
     },
-    'getReferences are deprecated, because the contents are not trusted. Migration:\n' +
-    '1. first checkSignature(), \n' +
-    '2. .signedReferences contain list of XML strings that are signed in this step\n' +
-    '3. Re-parse each string inside .signedReferences, and use only that content for processing\n' +
-    '4. Feel free to ask for help inside the xml-crypto repository'
+    "getReferences are deprecated, because the contents are not trusted. Migration:\n" +
+      "1. first checkSignature(), \n" +
+      "2. .signedReferences contain list of XML strings that are signed in this step\n" +
+      "3. Re-parse each string inside .signedReferences, and use only that content for processing\n" +
+      "4. Feel free to ask for help inside the xml-crypto repository",
   );
 
   getReferences(): Reference[] {
